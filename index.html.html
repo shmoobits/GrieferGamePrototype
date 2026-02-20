@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Griefer - 3rd Person</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; font-family: 'Arial Black', sans-serif; }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+        #hud {
+            position: absolute; top: 20px; left: 20px; color: white;
+            font-size: 20px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none; z-index: 10;
+        }
+        .health-bar {
+            width: 100px; height: 10px; background: #333;
+            border: 2px solid white; margin-top: 5px;
+        }
+        .health-fill {
+            height: 100%; background: linear-gradient(90deg, #ff0000, #00ff00);
+            transition: width 0.3s;
+        }
+        #instructions {
+            position: absolute; bottom: 20px; left: 20px; color: white;
+            font-family: Arial, sans-serif; font-size: 14px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            pointer-events: none; z-index: 10;
+        }
+        #tauntOverlay {
+            position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%);
+            color: #FFD700; font-size: 28px;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.9);
+            pointer-events: none; z-index: 50; display: none;
+            font-family: 'Arial Black', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div>GRIEFER - 3RD PERSON</div>
+        <div style="margin-top: 10px; font-size: 24px; color: #FFD700;">
+            Score: <span id="scoreValue">0</span>
+        </div>
+        <div style="margin-top: 5px; font-size: 18px; color: #FF69B4;">
+            Lives: <span id="livesValue">❤️❤️❤️</span>
+        </div>
+        <div style="margin-top: 10px; font-size: 16px;">
+            Weapon: <span id="weaponName">NONE</span>
+        </div>
+        <div id="ammoDisplay" style="display: none;">
+            Ammo: <span id="ammoCount">0</span>
+        </div>
+        <div style="margin-top: 10px;">
+            Health: <span id="healthValue">100</span>
+            <div class="health-bar">
+                <div class="health-fill" id="healthBar" style="width: 100%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tauntOverlay"></div>
+
+    <div id="instructions">
+        <div><strong>Click screen to start!</strong></div>
+        <div>WASD - Move | Mouse - Look | Left Click - Shoot</div>
+        <div style="margin-top: 5px; color: #FFD700;">
+            Collect: Pink=Plunger | Green=Pogo | Yellow=Ammo | Red=6-7 Bomb
+        </div>
+        <div id="lockStatus" style="margin-top: 10px; color: #FF6B6B;">
+            ⚠️ Click to lock mouse
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        console.log('=== GRIEFER GAME STARTING ===');
+
+        // Game state
+        const gameState = {
+            currentWeapon: null,
+            playerHealth: 100,
+            lives: 3,
+            score: 0,
+            ammo: { plunger: 0, pogo: 0, six_seven: 0 }
+        };
+
+        const collisionTaunts = [
+            "Hey dummy, watch where you're going! 🙄",
+            "Watch it, pal! 😠",
+            "You got a license to drive?! 🚗💥",
+            "Ouch! Use your eyes! 👀"
+        ];
+
+        const hitReactions = [
+            "SPLAT! 💥", "NOT THE FACE! 😱", "OOF! 💫", "WHY ME?! 😩"
+        ];
+
+        const deathTaunts = [
+            "GG EZ! 😂", "You got REKT! 💀", "Git gud! 🎮", "Too easy! 🥱"
+        ];
+
+        let lastTauntTime = 0;
+        const TAUNT_COOLDOWN = 3000;
+
+        function showTaunt(text) {
+            const now = Date.now();
+            if (now - lastTauntTime < TAUNT_COOLDOWN) return;
+            lastTauntTime = now;
+            
+            const tauntEl = document.getElementById('tauntOverlay');
+            tauntEl.textContent = text;
+            tauntEl.style.display = 'block';
+            setTimeout(() => tauntEl.style.display = 'none', 2000);
+        }
+
+        // Scene
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 0, 100);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const light = new THREE.DirectionalLight(0xffffff, 0.8);
+        light.position.set(10, 20, 10);
+        light.castShadow = true;
+        scene.add(light);
+
+        // Ground
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(100, 100),
+            new THREE.MeshStandardMaterial({ color: 0x90EE90 })
+        );
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Walls
+        [[0,20,40,1], [0,-20,40,1], [20,0,1,40], [-20,0,1,40]].forEach(w => {
+            const wall = new THREE.Mesh(
+                new THREE.BoxGeometry(w[2], 5, w[3]),
+                new THREE.MeshStandardMaterial({ color: 0xFF6B6B })
+            );
+            wall.position.set(w[0], 2.5, w[1]);
+            wall.castShadow = true;
+            scene.add(wall);
+        });
+
+        // Obstacles
+        const obstacles = [];
+        for (let i = 0; i < 8; i++) {
+            const obs = new THREE.Mesh(
+                new THREE.CylinderGeometry(1, 1, 2),
+                new THREE.MeshStandardMaterial({ color: 0xFF69B4, emissive: 0xFF1493, emissiveIntensity: 0.3 })
+            );
+            obs.position.set((Math.random()-0.5)*30, 1, (Math.random()-0.5)*30);
+            obs.castShadow = true;
+            obs.userData.isBouncy = true;
+            scene.add(obs);
+            obstacles.push(obs);
+        }
+
+        // Player
+        const player = new THREE.Group();
+        const playerBody = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.5, 1, 8, 16),
+            new THREE.MeshStandardMaterial({ color: 0x4169E1 })
+        );
+        playerBody.castShadow = true;
+        player.add(playerBody);
+        player.position.set(0, 1.5, 5);
+        scene.add(player);
+
+        // Camera setup
+        camera.position.set(0, 6, 10);
+
+        // Pickups
+        const pickups = [];
+        function createPickup(type, x, z, color) {
+            const p = new THREE.Mesh(
+                new THREE.SphereGeometry(0.5),
+                new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3 })
+            );
+            p.position.set(x, 1, z);
+            p.userData = { type };
+            scene.add(p);
+            pickups.push(p);
+        }
+
+        createPickup('plunger', -10, -10, 0xFF1493);
+        createPickup('pogo', 10, 10, 0x00FF00);
+        createPickup('six_seven', 0, -15, 0xFF0000);
+        createPickup('ammo', 15, 5, 0xFFFF00);
+
+        // Bots
+        const bots = [];
+        for (let i = 0; i < 3; i++) {
+            const botGroup = new THREE.Group();
+            const bot = new THREE.Mesh(
+                new THREE.CapsuleGeometry(0.5, 1.5, 8, 16),
+                new THREE.MeshStandardMaterial({ color: 0xFF6B6B })
+            );
+            bot.castShadow = true;
+            botGroup.add(bot);
+            
+            botGroup.position.set((Math.random()-0.5)*30, 1.5, (Math.random()-0.5)*30);
+            botGroup.userData = {
+                velocity: new THREE.Vector3(),
+                targetDir: new THREE.Vector3(),
+                changeTime: 0,
+                health: 100,
+                hasWeapon: Math.random() < 0.5,
+                lastShot: 0
+            };
+            
+            scene.add(botGroup);
+            bots.push(botGroup);
+        }
+
+        // Controls
+        const keys = {};
+        let isLocked = false;
+        let yaw = 0, pitch = 0;
+
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        document.body.addEventListener('click', () => {
+            if (!isLocked) {
+                document.body.requestPointerLock();
+                console.log('Requesting pointer lock...');
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isLocked = document.pointerLockElement === document.body;
+            console.log('Pointer lock:', isLocked);
+            const status = document.getElementById('lockStatus');
+            if (isLocked) {
+                status.textContent = '✓ Mouse locked - Ready!';
+                status.style.color = '#00FF00';
+            } else {
+                status.textContent = '⚠️ Click to lock mouse';
+                status.style.color = '#FF6B6B';
+            }
+        });
+
+        document.addEventListener('mousemove', e => {
+            if (!isLocked) return;
+            yaw -= e.movementX * 0.003;
+            pitch -= e.movementY * 0.003;
+            pitch = Math.max(-Math.PI/3, Math.min(Math.PI/3, pitch));
+        });
+
+        // Projectiles
+        let projectiles = [];
+
+        function shootPlunger() {
+            console.log('SHOOTING PLUNGER!');
+            const dir = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+            const plunger = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.1, 0.3, 0.5),
+                new THREE.MeshStandardMaterial({ color: 0xFF1493 })
+            );
+            plunger.position.copy(player.position);
+            plunger.userData = {
+                velocity: dir.multiplyScalar(30),
+                lifetime: 0,
+                type: 'plunger'
+            };
+            scene.add(plunger);
+            projectiles.push(plunger);
+        }
+
+        // Shooting
+        document.addEventListener('mousedown', e => {
+            if (e.button !== 0 || !isLocked) return;
+            
+            console.log('Click! Weapon:', gameState.currentWeapon, 'Ammo:', gameState.ammo);
+            
+            const w = gameState.currentWeapon;
+            if (w === 'plunger' && gameState.ammo.plunger > 0) {
+                shootPlunger();
+                gameState.ammo.plunger--;
+                updateHUD();
+            } else {
+                console.log('Cannot shoot:', w, gameState.ammo[w]);
+            }
+        });
+
+        function updateHUD() {
+            document.getElementById('weaponName').textContent = 
+                gameState.currentWeapon ? gameState.currentWeapon.toUpperCase() : 'NONE';
+            document.getElementById('ammoDisplay').style.display = gameState.currentWeapon ? 'block' : 'none';
+            document.getElementById('ammoCount').textContent = gameState.ammo[gameState.currentWeapon] || 0;
+            document.getElementById('healthValue').textContent = Math.floor(gameState.playerHealth);
+            document.getElementById('healthBar').style.width = gameState.playerHealth + '%';
+            document.getElementById('scoreValue').textContent = gameState.score;
+            document.getElementById('livesValue').textContent = '❤️'.repeat(gameState.lives) || '💀';
+        }
+
+        // Death
+        let isDying = false;
+        function handleDeath() {
+            if (isDying) return;
+            isDying = true;
+            
+            showTaunt(deathTaunts[Math.floor(Math.random() * deathTaunts.length)]);
+            
+            let deathTime = 0;
+            const deathInterval = setInterval(() => {
+                deathTime += 0.05;
+                player.rotation.y += 0.3;
+                player.scale.setScalar(Math.max(0.1, 1 - deathTime));
+                player.position.y = 1.5 + Math.sin(deathTime * 10) * 2;
+                
+                if (deathTime > 1) {
+                    clearInterval(deathInterval);
+                    gameState.lives--;
+                    updateHUD();
+                    
+                    if (gameState.lives <= 0) {
+                        const gameOver = document.createElement('div');
+                        gameOver.style.cssText = `
+                            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                            background: rgba(0,0,0,0.95); display: flex; flex-direction: column;
+                            align-items: center; justify-content: center; z-index: 1000;
+                            color: #FF0000; font-size: 72px; font-family: Arial Black;
+                        `;
+                        gameOver.innerHTML = `
+                            <div>GAME OVER! 💀</div>
+                            <div style="font-size: 48px; color: #FFD700; margin-top: 20px;">
+                                Final Score: ${gameState.score}
+                            </div>
+                            <div style="font-size: 24px; color: white; margin-top: 40px;">
+                                Refresh to play again
+                            </div>
+                        `;
+                        document.body.appendChild(gameOver);
+                    } else {
+                        player.position.set((Math.random()-0.5)*30, 1.5, (Math.random()-0.5)*30);
+                        player.rotation.y = 0;
+                        player.scale.setScalar(1);
+                        gameState.playerHealth = 100;
+                        updateHUD();
+                        isDying = false;
+                    }
+                }
+            }, 50);
+        }
+
+        // Game loop
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            if (gameState.playerHealth <= 0 && !isDying) {
+                handleDeath();
+                return;
+            }
+            if (isDying) {
+                renderer.render(scene, camera);
+                return;
+            }
+
+            // Movement
+            const speed = 8;
+            const moveDir = new THREE.Vector3();
+            if (keys['KeyW']) moveDir.z += 1;
+            if (keys['KeyS']) moveDir.z -= 1;
+            if (keys['KeyA']) moveDir.x -= 1;
+            if (keys['KeyD']) moveDir.x += 1;
+
+            if (moveDir.length() > 0) {
+                moveDir.normalize();
+                const cameraDir = new THREE.Vector3();
+                camera.getWorldDirection(cameraDir);
+                cameraDir.y = 0;
+                cameraDir.normalize();
+                
+                const cameraRight = new THREE.Vector3();
+                cameraRight.crossVectors(cameraDir, new THREE.Vector3(0,1,0));
+                
+                const worldMove = new THREE.Vector3();
+                worldMove.addScaledVector(cameraDir, moveDir.z);
+                worldMove.addScaledVector(cameraRight, moveDir.x);
+                worldMove.normalize();
+                
+                player.rotation.y = Math.atan2(worldMove.x, worldMove.z);
+                player.position.x += worldMove.x * speed * delta;
+                player.position.z += worldMove.z * speed * delta;
+            }
+
+            // Boundary
+            player.position.x = Math.max(-18, Math.min(18, player.position.x));
+            player.position.z = Math.max(-18, Math.min(18, player.position.z));
+
+            // Obstacle collision
+            obstacles.forEach(obs => {
+                const dist = Math.sqrt(
+                    Math.pow(player.position.x - obs.position.x, 2) +
+                    Math.pow(player.position.z - obs.position.z, 2)
+                );
+                
+                if (dist < 1.5) {
+                    const dir = new THREE.Vector2(
+                        player.position.x - obs.position.x,
+                        player.position.z - obs.position.z
+                    ).normalize();
+                    player.position.x = obs.position.x + dir.x * 1.5;
+                    player.position.z = obs.position.z + dir.y * 1.5;
+                    
+                    showTaunt(collisionTaunts[Math.floor(Math.random() * collisionTaunts.length)]);
+                    obs.scale.y = 1.3;
+                    setTimeout(() => obs.scale.y = 1, 200);
+                }
+            });
+
+            // Camera follow
+            const targetX = player.position.x - Math.sin(yaw) * 8;
+            const targetZ = player.position.z - Math.cos(yaw) * 8;
+            const targetY = player.position.y + 4 + pitch * 2;
+            
+            camera.position.x += (targetX - camera.position.x) * 0.1;
+            camera.position.z += (targetZ - camera.position.z) * 0.1;
+            camera.position.y += (targetY - camera.position.y) * 0.1;
+            camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
+
+            // Pickups
+            pickups.forEach(p => {
+                p.position.y = 1 + Math.sin(time * 2) * 0.3;
+                p.rotation.y += delta * 2;
+                
+                if (player.position.distanceTo(p.position) < 2) {
+                    const type = p.userData.type;
+                    if (type === 'ammo') {
+                        if (gameState.currentWeapon) gameState.ammo[gameState.currentWeapon] += 10;
+                    } else {
+                        gameState.currentWeapon = type;
+                        gameState.ammo[type] += (type === 'plunger' ? 10 : 1);
+                    }
+                    updateHUD();
+                    p.position.set((Math.random()-0.5)*35, 1, (Math.random()-0.5)*35);
+                    console.log('Picked up:', type, 'Ammo:', gameState.ammo);
+                }
+            });
+
+            // Bots
+            bots.forEach(bot => {
+                if (time > bot.userData.changeTime) {
+                    bot.userData.targetDir.set(
+                        (Math.random()-0.5)*2, 0, (Math.random()-0.5)*2
+                    ).normalize();
+                    bot.userData.changeTime = time + Math.random() * 3 + 2;
+                }
+
+                bot.userData.velocity.lerp(bot.userData.targetDir.clone().multiplyScalar(3), 0.1);
+                bot.position.x += bot.userData.velocity.x * delta;
+                bot.position.z += bot.userData.velocity.z * delta;
+                bot.position.x = Math.max(-18, Math.min(18, bot.position.x));
+                bot.position.z = Math.max(-18, Math.min(18, bot.position.z));
+
+                // Bot shooting
+                if (bot.userData.hasWeapon && Date.now() - bot.userData.lastShot > 3000) {
+                    const dist = bot.position.distanceTo(player.position);
+                    if (dist < 15) {
+                        const dir = new THREE.Vector3(
+                            player.position.x - bot.position.x,
+                            0,
+                            player.position.z - bot.position.z
+                        ).normalize();
+                        
+                        const plunger = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.1, 0.3, 0.5),
+                            new THREE.MeshStandardMaterial({ color: 0xFF1493 })
+                        );
+                        plunger.position.copy(bot.position);
+                        plunger.userData = {
+                            velocity: dir.multiplyScalar(25),
+                            lifetime: 0,
+                            type: 'bot_plunger'
+                        };
+                        scene.add(plunger);
+                        projectiles.push(plunger);
+                        bot.userData.lastShot = Date.now();
+                    }
+                }
+            });
+
+            // Projectiles
+            projectiles = projectiles.filter(proj => {
+                if (proj.userData.velocity) {
+                    proj.userData.velocity.y -= 9.8 * delta;
+                }
+                proj.position.add(proj.userData.velocity.clone().multiplyScalar(delta));
+                proj.userData.lifetime += delta;
+
+                if (proj.userData.type === 'plunger') {
+                    bots.forEach(bot => {
+                        if (proj.position.distanceTo(bot.position) < 1) {
+                            bot.userData.health -= 20;
+                            if (bot.userData.health <= 0) {
+                                gameState.score += 100;
+                                updateHUD();
+                            }
+                            scene.remove(proj);
+                        }
+                    });
+                } else if (proj.userData.type === 'bot_plunger') {
+                    if (proj.position.distanceTo(player.position) < 1) {
+                        gameState.playerHealth = Math.max(0, gameState.playerHealth - 15);
+                        updateHUD();
+                        showTaunt("OW! I got hit! 😫");
+                        scene.remove(proj);
+                    }
+                }
+
+                if (proj.userData.lifetime > 3 || proj.position.y < 0) {
+                    scene.remove(proj);
+                    return false;
+                }
+                return true;
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+        updateHUD();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        console.log('=== GAME LOADED ===');
+    </script>
+</body>
+</html>
